@@ -21,6 +21,8 @@ from tqdm import tqdm
 from utils.general import xyxy2xywh, xywh2xyxy
 from utils.torch_utils import torch_distributed_zero_first
 
+from data_process.data_augmentation.face import FaceDA
+
 # Parameters
 help_url = 'https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
 img_formats = ['bmp', 'jpg', 'jpeg', 'png', 'tif', 'tiff', 'dng']  # acceptable image suffixes
@@ -333,6 +335,8 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         self.mosaic = self.augment and not self.rect  # load 4 images at a time into a mosaic (only during training)
         self.mosaic_border = [-img_size // 2, -img_size // 2]
         self.stride = stride
+        # torch.multiprocessing.set_start_method('spawn')
+        self.faceDA = FaceDA()
 
         def img2label_paths(img_paths):
             # Define label paths as a function of image paths
@@ -548,6 +552,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 labels[:, 2] = ratio[1] * h * (x[:, 2] - x[:, 4] / 2) + pad[1]  # pad height
                 labels[:, 3] = ratio[0] * w * (x[:, 1] + x[:, 3] / 2) + pad[0]
                 labels[:, 4] = ratio[1] * h * (x[:, 2] + x[:, 4] / 2) + pad[1]
+                labels = self.faceDA.getLandmarks(img, labels)
 
         if self.augment:
             # Augment imagespace
