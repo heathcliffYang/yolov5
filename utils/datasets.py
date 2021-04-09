@@ -70,7 +70,7 @@ def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=Fa
 
     batch_size = min(batch_size, len(dataset))
     nw = min([os.cpu_count() // world_size, batch_size if batch_size > 1 else 0, workers])  # number of workers
-    sampler = torch.utils.data.distributed.DistributedSampler(dataset) if rank != -1 else None
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, seed=4) if rank != -1 else None
     dataloader = InfiniteDataLoader(dataset,
                                     batch_size=batch_size,
                                     num_workers=nw,
@@ -576,6 +576,9 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             labels[:, 1:5] = xyxy2xywh(labels[:, 1:5])  # convert xyxy to xywh
             labels[:, [2, 4]] /= img.shape[0]  # normalized height 0-1
             labels[:, [1, 3]] /= img.shape[1]  # normalized width 0-1
+            # landmarks
+            labels[:, 5::2] /= img.shape[1] # normalized landmark x
+            labels[:, 6::2] /= img.shape[0] # normalized landmark y
 
         if self.augment:
             # flip up-down
@@ -590,7 +593,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 if nL:
                     labels[:, 1] = 1 - labels[:, 1]
 
-        labels_out = torch.zeros((nL, 6))
+        labels_out = torch.zeros((nL, 6 + 68*2))
         if nL:
             labels_out[:, 1:] = torch.from_numpy(labels)
 
@@ -805,7 +808,7 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
     # Transform label coordinates
     n = len(targets)
     if n:
-        # warp points
+        # warp points of bboxes
         xy = np.ones((n * 4, 3))
         xy[:, :2] = targets[:, [1, 2, 3, 4, 1, 4, 3, 2]].reshape(n * 4, 2)  # x1y1, x2y2, x1y2, x2y1
         xy = xy @ M.T  # transform
@@ -819,23 +822,24 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
         y = xy[:, [1, 3, 5, 7]]
         xy = np.concatenate((x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T
 
-        # # apply angle-based reduction of bounding boxes
-        # radians = a * math.pi / 180
-        # reduction = max(abs(math.sin(radians)), abs(math.cos(radians))) ** 0.5
-        # x = (xy[:, 2] + xy[:, 0]) / 2
-        # y = (xy[:, 3] + xy[:, 1]) / 2
-        # w = (xy[:, 2] - xy[:, 0]) * reduction
-        # h = (xy[:, 3] - xy[:, 1]) * reduction
-        # xy = np.concatenate((x - w / 2, y - h / 2, x + w / 2, y + h / 2)).reshape(4, n).T
-
         # clip boxes
         xy[:, [0, 2]] = xy[:, [0, 2]].clip(0, width)
         xy[:, [1, 3]] = xy[:, [1, 3]].clip(0, height)
+
+        # warp landmarks
+        landmarks_xy = np.ones((n * 68, 3))
+        landmarks_xy[:,:2] = targets[:, 5:].reshape((-1, 2))
+        landmarks_xy = landmarks_xy @ M.T
+        if perspective:
+            landmarks_xy = (landmarks_xy[:, :2] / landmarks_xy[:, 2:3]).reshape(n, 68*2)  # rescale
+        else:  # affine
+            landmarks_xy = landmarks_xy[:, :2].reshape(n, 68*2)
 
         # filter candidates
         i = box_candidates(box1=targets[:, 1:5].T * s, box2=xy.T)
         targets = targets[i]
         targets[:, 1:5] = xy[i]
+        targets[:, 5:] = landmarks_xy[i]
 
     return img, targets
 

@@ -126,10 +126,12 @@ def build_targets(p, targets, model):
     # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
     det = model.module.model[-1] if is_parallel(model) else model.model[-1]  # Detect() module
     na, nt = det.na, targets.shape[0]  # number of anchors, targets
+    # print(na, nt)
     tcls, tbox, indices, anch = [], [], [], []
     gain = torch.ones(7, device=targets.device)  # normalized to gridspace gain
     ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
     targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
+    # print(gain.shape, ai.shape, targets.shape)
 
     g = 0.5  # bias
     off = torch.tensor([[0, 0],
@@ -139,16 +141,27 @@ def build_targets(p, targets, model):
 
     for i in range(det.nl):
         anchors = det.anchors[i]
+        # print(anchors.shape)
         gain[2:6] = torch.tensor(p[i].shape)[[3, 2, 3, 2]]  # xyxy gain
 
         # Match targets to anchors
-        t = targets * gain
+        # print(targets[:, :, :6].shape, targets[:, :, -1][:,:,None].shape)
+        t = torch.cat((targets[:, :, :6], targets[:, :, -1][:,:,None]), 2)  * gain
+        # print(gain[2:4].repeat(68).shape, targets[:, :, 7:].shape)
+        landmark_xy = targets[:, :, 7:143] #* gain[2:4].repeat(68)
+        # print(landmark_xy.shape)
+
         if nt:
             # Matches
+            # print(anchors[:, None].shape)
             r = t[:, :, 4:6] / anchors[:, None]  # wh ratio
+            # print("torch max:", torch.max(r, 1. / r).shape)
             j = torch.max(r, 1. / r).max(2)[0] < model.hyp['anchor_t']  # compare
             # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
+            # print(j.shape, t.shape)
             t = t[j]  # filter
+            landmark_xy = landmark_xy[j]
+            # print(t.shape)
 
             # Offsets
             gxy = t[:, 2:4]  # grid xy
@@ -156,23 +169,39 @@ def build_targets(p, targets, model):
             j, k = ((gxy % 1. < g) & (gxy > 1.)).T
             l, m = ((gxi % 1. < g) & (gxi > 1.)).T
             j = torch.stack((torch.ones_like(j), j, k, l, m))
+            # print(j.shape, t.repeat((5, 1, 1)).shape)
             t = t.repeat((5, 1, 1))[j]
+            landmark_xy = landmark_xy.repeat((5, 1, 1))[j]
+            # print(t.shape, landmark_xy.shape)
+            # print(t.shape)
             offsets = (torch.zeros_like(gxy)[None] + off[:, None])[j]
+            # print(torch.zeros_like(gxy)[None].shape, off[:, None].shape, (torch.zeros_like(gxy)[None] + off[:, None]).shape)
         else:
             t = targets[0]
             offsets = 0
 
         # Define
         b, c = t[:, :2].long().T  # image, class
+        # print("image ??", b, c)
         gxy = t[:, 2:4]  # grid xy
         gwh = t[:, 4:6]  # grid wh
+        # aaaaa = torch.tensor([0., 0.2, 0.7, 1., 1.2, 4.8])
+        # print(aaaaa.long())
         gij = (gxy - offsets).long()
+        # print("gxy:", gxy)
+        # print("gij:", gij)
+        # print("offset:", offsets)
         gi, gj = gij.T  # grid xy indices
+
+        # print(gij.shape, gij.repeat(1,68).shape)
+        glandmarks = landmark_xy - gij.repeat(1,68)
+        # print("glandmarks:", glandmarks.shape, gxy.shape)
+        # print(t[100000000000000])
 
         # Append
         a = t[:, 6].long()  # anchor indices
         indices.append((b, a, gj.clamp_(0, gain[3] - 1), gi.clamp_(0, gain[2] - 1)))  # image, anchor, grid indices
-        tbox.append(torch.cat((gxy - gij, gwh), 1))  # box
+        tbox.append(torch.cat((gxy - gij, gwh, glandmarks), 1))  # box
         anch.append(anchors[a])  # anchors
         tcls.append(c)  # class
 
