@@ -61,13 +61,14 @@ class FocalLoss(nn.Module):
 
 def compute_loss(p, targets, model):  # predictions, targets, model
     device = targets.device
-    lcls, lbox, lobj = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
+    lcls, lbox, lobj, llandmark = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
     tcls, tbox, indices, anchors = build_targets(p, targets, model)  # targets
     h = model.hyp  # hyperparameters
 
     # Define criteria
     BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([h['cls_pw']])).to(device)
     BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([h['obj_pw']])).to(device)
+    MSElandmarks = nn.MSELoss()
 
     # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
     cp, cn = smooth_BCE(eps=0.0)
@@ -88,6 +89,7 @@ def compute_loss(p, targets, model):  # predictions, targets, model
         n = b.shape[0]  # number of targets
         if n:
             nt += n  # cumulative targets
+            # print(pi.shape)
             ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets
 
             # Regression
@@ -96,15 +98,24 @@ def compute_loss(p, targets, model):  # predictions, targets, model
             pbox = torch.cat((pxy, pwh), 1).to(device)  # predicted box
             iou = bbox_iou(pbox.T, tbox[i], x1y1x2y2=False, CIoU=True)  # iou(prediction, target)
             lbox += (1.0 - iou).mean()  # iou loss
+            # landmark regression
+            plandmarks = ps[:, 5+model.nc:].sigmoid() * 2. - 0.5
+            glandmarks = tbox[i][:,4:]
+            no_landmarks_f = ~(glandmarks == torch.zeros_like(glandmarks[0])).all(1)
+            plandmarks = plandmarks[no_landmarks_f]
+            glandmarks = glandmarks[no_landmarks_f]
+            llandmark += MSElandmarks(plandmarks, glandmarks)
+            print("llandmark:", llandmark)
+
 
             # Objectness
             tobj[b, a, gj, gi] = (1.0 - model.gr) + model.gr * iou.detach().clamp(0).type(tobj.dtype)  # iou ratio
 
             # Classification
             if model.nc > 1:  # cls loss (only if multiple classes)
-                t = torch.full_like(ps[:, 5:], cn, device=device)  # targets
+                t = torch.full_like(ps[:, 5:5+model.nc], cn, device=device)  # targets
                 t[range(n), tcls[i]] = cp
-                lcls += BCEcls(ps[:, 5:], t)  # BCE
+                lcls += BCEcls(ps[:, 5:5+model.nc], t)  # BCE
 
             # Append targets to text file
             # with open('targets.txt', 'a') as file:
@@ -116,10 +127,12 @@ def compute_loss(p, targets, model):  # predictions, targets, model
     lbox *= h['box'] * s
     lobj *= h['obj'] * s * (1.4 if no == 4 else 1.)
     lcls *= h['cls'] * s
+    llandmark *= h['box'] * s * 0.1
+    print(lbox.shape, llandmark.shape)
     bs = tobj.shape[0]  # batch size
 
-    loss = lbox + lobj + lcls
-    return loss * bs, torch.cat((lbox, lobj, lcls, loss)).detach()
+    loss = lbox + lobj + lcls + llandmark
+    return loss * bs, torch.cat((lbox, lobj, lcls, loss, llandmark)).detach()
 
 
 def build_targets(p, targets, model):
@@ -148,8 +161,8 @@ def build_targets(p, targets, model):
         # print(targets[:, :, :6].shape, targets[:, :, -1][:,:,None].shape)
         t = torch.cat((targets[:, :, :6], targets[:, :, -1][:,:,None]), 2)  * gain
         # print(gain[2:4].repeat(68).shape, targets[:, :, 7:].shape)
-        landmark_xy = targets[:, :, 7:143] #* gain[2:4].repeat(68)
-        # print(landmark_xy.shape)
+        landmark_xy = targets[:, :, 6:16] * gain[2:4].repeat(5)
+        print("162:", landmark_xy.shape)
 
         if nt:
             # Matches
@@ -161,7 +174,7 @@ def build_targets(p, targets, model):
             # print(j.shape, t.shape)
             t = t[j]  # filter
             landmark_xy = landmark_xy[j]
-            # print(t.shape)
+            print("174:", landmark_xy.shape)
 
             # Offsets
             gxy = t[:, 2:4]  # grid xy
@@ -172,12 +185,14 @@ def build_targets(p, targets, model):
             # print(j.shape, t.repeat((5, 1, 1)).shape)
             t = t.repeat((5, 1, 1))[j]
             landmark_xy = landmark_xy.repeat((5, 1, 1))[j]
-            # print(t.shape, landmark_xy.shape)
+            print("185:", landmark_xy.shape)
             # print(t.shape)
             offsets = (torch.zeros_like(gxy)[None] + off[:, None])[j]
             # print(torch.zeros_like(gxy)[None].shape, off[:, None].shape, (torch.zeros_like(gxy)[None] + off[:, None]).shape)
         else:
             t = targets[0]
+            landmark_xy = landmark_xy[0]
+            print("No?", t.shape, landmark_xy.shape)
             offsets = 0
 
         # Define
@@ -194,8 +209,8 @@ def build_targets(p, targets, model):
         gi, gj = gij.T  # grid xy indices
 
         # print(gij.shape, gij.repeat(1,68).shape)
-        glandmarks = landmark_xy - gij.repeat(1,68)
-        # print("glandmarks:", glandmarks.shape, gxy.shape)
+        glandmarks = landmark_xy - gij.repeat(1,5)
+        print("208:", glandmarks.shape)
         # print(t[100000000000000])
 
         # Append

@@ -593,7 +593,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 if nL:
                     labels[:, 1] = 1 - labels[:, 1]
 
-        labels_out = torch.zeros((nL, 6 + 68*2))
+        labels_out = torch.zeros((nL, 6 + 5*2))
         if nL:
             labels_out[:, 1:] = torch.from_numpy(labels)
 
@@ -827,13 +827,13 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
         xy[:, [1, 3]] = xy[:, [1, 3]].clip(0, height)
 
         # warp landmarks
-        landmarks_xy = np.ones((n * 68, 3))
+        landmarks_xy = np.ones((n * 5, 3))
         landmarks_xy[:,:2] = targets[:, 5:].reshape((-1, 2))
         landmarks_xy = landmarks_xy @ M.T
         if perspective:
-            landmarks_xy = (landmarks_xy[:, :2] / landmarks_xy[:, 2:3]).reshape(n, 68*2)  # rescale
+            landmarks_xy = (landmarks_xy[:, :2] / landmarks_xy[:, 2:3]).reshape(n, 5*2)  # rescale
         else:  # affine
-            landmarks_xy = landmarks_xy[:, :2].reshape(n, 68*2)
+            landmarks_xy = landmarks_xy[:, :2].reshape(n, 5*2)
 
         # filter candidates
         i = box_candidates(box1=targets[:, 1:5].T * s, box2=xy.T)
