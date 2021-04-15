@@ -3,6 +3,8 @@
 import torch
 import torch.nn as nn
 
+import numpy as np
+
 from utils.general import bbox_iou
 from utils.torch_utils import is_parallel
 
@@ -12,7 +14,7 @@ def smooth_BCE(eps=0.1):  # https://github.com/ultralytics/yolov3/issues/238#iss
     return 1.0 - 0.5 * eps, 0.5 * eps
 
 
-class BCEBlurWithLogitsLoss(nn.Module):
+class BCEBWithLogitsLoss(nn.Module):
     # BCEwithLogitLoss() with reduced missing label effects.
     def __init__(self, alpha=0.05):
         super(BCEBlurWithLogitsLoss, self).__init__()
@@ -94,8 +96,12 @@ def compute_loss(p, targets, model):  # predictions, targets, model
             pxy = ps[:, :2].sigmoid() * 2. - 0.5
             pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
             pbox = torch.cat((pxy, pwh), 1).to(device)  # predicted box
-            iou = bbox_iou(pbox.T, tbox[i], x1y1x2y2=False, CIoU=True)  # iou(prediction, target)
-            lbox += (1.0 - iou).mean()  # iou loss
+            iou, loss_type = bbox_iou(pbox.T, tbox[i], x1y1x2y2=False, CIoU=True)  # iou(prediction, target)
+            if loss_type == "ciou":
+                lbox += (1.0 - iou).mean()  # iou loss
+            else:
+                lbox += (iou).mean()  # center loss
+            # print(lbox)
 
             # Objectness
             tobj[b, a, gj, gi] = (1.0 - model.gr) + model.gr * iou.detach().clamp(0).type(tobj.dtype)  # iou ratio
@@ -137,16 +143,21 @@ def build_targets(p, targets, model):
                         # [1, 1], [1, -1], [-1, 1], [-1, -1],  # jk,jm,lk,lm
                         ], device=targets.device).float() * g  # offsets
 
+    filter = []
+
     for i in range(det.nl):
         anchors = det.anchors[i]
         gain[2:6] = torch.tensor(p[i].shape)[[3, 2, 3, 2]]  # xyxy gain
 
         # Match targets to anchors
         t = targets * gain
+
         if nt:
             # Matches
             r = t[:, :, 4:6] / anchors[:, None]  # wh ratio
+            # torch.maximum -> tensor -> tensor.max
             j = torch.max(r, 1. / r).max(2)[0] < model.hyp['anchor_t']  # compare
+            filter.append(j)
             # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
             t = t[j]  # filter
 

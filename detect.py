@@ -69,9 +69,26 @@ def detect(save_img=False):
         # Inference
         t1 = time_synchronized()
         pred = model(img, augment=opt.augment)[0]
-
+        # print(pred.shape)
+        # print(pred[0,0,:])
+        # print(pred[0,512,:])
         # Apply NMS
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
+        # for box_n in pred:
+        #     for jj in range(box_n.shape[0]):
+        #         x1 = box_n[jj][0]
+        #         y1 = box_n[jj][1]
+        #         x2 = box_n[jj][2]
+        #         y2 = box_n[jj][3]
+        #         cx = (x1 + x2) / 2
+        #         cy = (y1 + y2) / 2
+        #         w = x2 - x1
+        #         h = y2 - y1
+        #         box_n[jj][0] = cx - 5
+        #         box_n[jj][1] = cy - 5
+        #         box_n[jj][2] = cx + 5
+        #         box_n[jj][3] = cy + 5
+        # print(pred)
         t2 = time_synchronized()
 
         # Apply Classifier
@@ -108,6 +125,7 @@ def detect(save_img=False):
 
                     if save_img or view_img:  # Add bbox to image
                         label = '%s %.2f' % (names[int(cls)], conf)
+                        # print(label, (xyxy[0] + xyxy[2])/2, (xyxy[1] + xyxy[3])/2)
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=3)
 
             # Print time (inference + NMS)

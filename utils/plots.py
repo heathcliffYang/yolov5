@@ -61,8 +61,8 @@ def plot_one_box(x, img, color=None, label=None, line_thickness=None):
         tf = max(tl - 1, 1)  # font thickness
         t_size = cv2.getTextSize(label, 0, fontScale=tl / 3, thickness=tf)[0]
         c2 = c1[0] + t_size[0], c1[1] - t_size[1] - 3
-        cv2.rectangle(img, c1, c2, color, -1, cv2.LINE_AA)  # filled
-        cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
+        # cv2.rectangle(img, c1, c2, color, -1, cv2.LINE_AA)  # filled
+        # cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
 
 
 def plot_wh_methods():  # from utils.plots import *; plot_wh_methods()
@@ -87,25 +87,31 @@ def plot_wh_methods():  # from utils.plots import *; plot_wh_methods()
 
 
 def output_to_target(output, width, height):
-    # Convert model output to target format [batch_id, class_id, x, y, w, h, conf]
-    if isinstance(output, torch.Tensor):
-        output = output.cpu().numpy()
-
     targets = []
     for i, o in enumerate(output):
-        if o is not None:
-            for pred in o:
-                box = pred[:4]
-                w = (box[2] - box[0]) / width
-                h = (box[3] - box[1]) / height
-                x = box[0] / width + w / 2
-                y = box[1] / height + h / 2
-                conf = pred[4]
-                cls = int(pred[5])
-
-                targets.append([i, cls, x, y, w, h, conf])
-
+        for *box, conf, cls in o.cpu().numpy():
+            targets.append([i, cls, *list(*xyxy2xywh(np.array(box)[None])), conf])
     return np.array(targets)
+    # # Convert model output to target format [batch_id, class_id, x, y, w, h, conf]
+    # if isinstance(output, torch.Tensor):
+    #     output = output.cpu().numpy()
+    #
+    # targets = []
+    # for i, o in enumerate(output):
+    #     if o is not None:
+    #         for pred in o:
+    #             box = pred[:4]
+    #             w = (box[2] - box[0]) / width
+    #             h = (box[3] - box[1]) / height
+    #             x = box[0] / width + w / 2
+    #             y = box[1] / height + h / 2
+    #             conf = pred[4]
+    #             cls = int(pred[5])
+    #
+    #             targets.append([i, cls, x, y, w, h, conf])
+    # if isinstance(targets, list):
+    #     return np.array(targets)
+    # return np.array(targets.cpu())
 
 
 def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max_size=640, max_subplots=16):

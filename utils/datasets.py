@@ -22,6 +22,7 @@ from utils.general import xyxy2xywh, xywh2xyxy
 from utils.torch_utils import torch_distributed_zero_first
 
 # Parameters
+dataset_img_count = 0
 help_url = 'https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
 img_formats = ['bmp', 'jpg', 'jpeg', 'png', 'tif', 'tiff', 'dng']  # acceptable image suffixes
 vid_formats = ['mov', 'avi', 'mp4', 'mpg', 'mpeg', 'm4v', 'wmv', 'mkv']  # acceptable video suffixes
@@ -755,6 +756,9 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
     height = img.shape[0] + border[0] * 2  # shape(h,w,c)
     width = img.shape[1] + border[1] * 2
 
+    height_orig = img.shape[0] + border[0] * 2  # shape(h,w,c)
+    width_orig = img.shape[1] + border[1] * 2
+
     # Center
     C = np.eye(3)
     C[0, 2] = -img.shape[1] / 2  # x translation (pixels)
@@ -765,18 +769,48 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
     P[2, 0] = random.uniform(-perspective, perspective)  # x perspective (about y)
     P[2, 1] = random.uniform(-perspective, perspective)  # y perspective (about x)
 
-    # Rotation and Scale
-    R = np.eye(3)
-    a = random.uniform(-degrees, degrees)
-    # a += random.choice([-180, -90, 0, 90])  # add 90deg rotations to small rotations
-    s = random.uniform(1 - scale, 1 + scale)
-    # s = 2 ** random.uniform(-scale, scale)
-    R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)
+    if random.randint(0,1) < 0.5:
+        # Shear
+        S = np.eye(3)
+        sx_d = random.uniform(-shear, shear)
+        sy_d = random.uniform(-shear, shear)
+        S[0, 1] = math.tan(sx_d * math.pi / 180)  # x shear (deg)
+        S[1, 0] = math.tan(sy_d * math.pi / 180)  # y shear (deg)
 
-    # Shear
-    S = np.eye(3)
-    S[0, 1] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # x shear (deg)
-    S[1, 0] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # y shear (deg)
+        # Rotation and Scale
+        R = np.eye(3)
+        if abs(sx_d) > 5 or abs(sy_d) > 5:
+            degrees = 0
+        a = random.uniform(-degrees, degrees)
+        s = random.uniform(1 - scale, 1 + scale)
+        R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)
+    else:
+        # Rotation and Scale
+        R = np.eye(3)
+        a = random.uniform(-degrees, degrees)
+        s = random.uniform(1 - scale, 1 + scale)
+        R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)
+
+        # Shear
+        S = np.eye(3)
+        shear = 15
+        sx_d = random.uniform(-shear, shear)
+        sy_d = random.uniform(-shear, shear)
+        S[0, 1] = math.tan(sx_d * math.pi / 180)  # x shear (deg)
+        S[1, 0] = math.tan(sy_d * math.pi / 180)  # y shear (deg)
+
+
+    # Compute final width and height
+    pre_M_1 = S @ R @ P @ np.array([[width_orig],[height_orig],[1]])
+    pre_M_2 = S @ R @ P @ np.array([[0],[0],[1]])
+    width = int(abs(pre_M_1[0,0] - pre_M_2[0,0]))
+    height = int(abs(pre_M_1[1,0] - pre_M_2[1,0]))
+
+    pre_M_1 = S @ R @ P @ np.array([[0],[height_orig],[1]])
+    pre_M_2 = S @ R @ P @ np.array([[width_orig],[0],[1]])
+
+    width = max( abs(int(pre_M_1[0,0] - pre_M_2[0,0])), width)
+    height = max( abs(int(pre_M_1[1,0] - pre_M_2[1,0])), height)
 
     # Translation
     T = np.eye(3)
@@ -790,6 +824,15 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
             img = cv2.warpPerspective(img, M, dsize=(width, height), borderValue=(114, 114, 114))
         else:  # affine
             img = cv2.warpAffine(img, M[:2], dsize=(width, height), borderValue=(114, 114, 114))
+
+    if width == 0 or height == 0:
+        print("Hi~ image:", img.shape, height, width)
+    img = cv2.resize(img, (width_orig, height_orig))
+
+    blur_kernel_size = random.choice([1,3,5,7,9,11])
+    img = cv2.GaussianBlur(img,(blur_kernel_size,blur_kernel_size),0)
+    if random.randint(0,1) < 0.5:
+        img = cv2.bitwise_not(img)
 
     # Visualize
     # import matplotlib.pyplot as plt
@@ -809,10 +852,57 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
         else:  # affine
             xy = xy[:, :2].reshape(n, 8)
 
+        # Reshape from (width, height) back to (width_orig, height_orig)
+        xy[:, [0, 2, 4, 6]] = xy[:, [0, 2, 4, 6]] * width_orig / width
+        xy[:, [1, 3, 5, 7]] = xy[:, [1, 3, 5, 7]] * height_orig / height
+
         # create new boxes
         x = xy[:, [0, 2, 4, 6]]
         y = xy[:, [1, 3, 5, 7]]
         xy = np.concatenate((x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T
+        # if os.path.isfile("test_align_original_%.5f_%.5f_%.5f.jpg"%(sx_d, sy_d, degrees)) == True:
+            # return None
+        # cv2.imwrite("test_align_original_%.5f_%.5f_%.5f.jpg"%(sx_d, sy_d, degrees), img)
+        box_side = int(min(abs(int(xy[0,2]) - int(xy[0,0])), abs(int(xy[0,3]) - int(xy[0,1])))/2)
+        box_side = 11
+        center_x = int( (int(xy[0,0])+int(xy[0,2]))/2 )
+        center_y = int( (int(xy[0,1])+int(xy[0,3]))/2 )
+        xy[0,0] = center_x - box_side
+        xy[0,2] = center_x + box_side
+        xy[0,1] = center_y - box_side
+        xy[0,3] = center_y + box_side
+        # cv2.rectangle(img, (int(max(xy[0,0],0)), int(max(xy[0,1], 0))), (int(min( xy[0,2],127)), int(min(xy[0,3], 63))), (0,255,0), thickness=2)
+
+        box_side = int(min(abs(int(xy[1,2]) - int(xy[1,0])), abs(int(xy[1,3]) - int(xy[1,1])))/2)
+        box_side = 11
+        center_x = int( (int(xy[1,0])+int(xy[1,2]))/2 )
+        center_y = int( (int(xy[1,1])+int(xy[1,3]))/2 )
+        xy[1,0] = center_x - box_side
+        xy[1,2] = center_x + box_side
+        xy[1,1] = center_y - box_side
+        xy[1,3] = center_y + box_side
+        # cv2.rectangle(img, (int(max(xy[1,0],0)), int(max(xy[1,1], 0))), (int(min( xy[1,2],127)), int(min(xy[1,3], 63))), (0,255,0), thickness=2)
+
+        box_side = int(min(abs(int(xy[2,2]) - int(xy[2,0])), abs(int(xy[2,3]) - int(xy[2,1])))/2)
+        box_side = 11
+        center_x = int( (int(xy[2,0])+int(xy[2,2]))/2 )
+        center_y = int( (int(xy[2,1])+int(xy[2,3]))/2 )
+        xy[2,0] = center_x - box_side
+        xy[2,2] = center_x + box_side
+        xy[2,1] = center_y - box_side
+        xy[2,3] = center_y + box_side
+        # cv2.rectangle(img, (int(max(xy[2,0],0)), int(max(xy[2,1], 0))), (int(min( xy[2,2],127)), int(min(xy[2,3], 63))), (0,255,0), thickness=2)
+
+        box_side = int(min(abs(int(xy[3,2]) - int(xy[3,0])), abs(int(xy[3,3]) - int(xy[3,1])))/2)
+        box_side = 11
+        center_x = int( (int(xy[3,0])+int(xy[3,2]))/2 )
+        center_y = int( (int(xy[3,1])+int(xy[3,3]))/2 )
+        xy[3,0] = center_x - box_side
+        xy[3,2] = center_x + box_side
+        xy[3,1] = center_y - box_side
+        xy[3,3] = center_y + box_side
+        # cv2.rectangle(img, (int(max(xy[3,0],0)), int(max(xy[3,1], 0))), (int(min( xy[3,2],127)), int(min(xy[3,3], 63))), (0,255,0), thickness=2)
+        # cv2.imwrite("test_align_%.5f_%.5f_%.5f.jpg"%(sx_d, sy_d, degrees), img)
 
         # # apply angle-based reduction of bounding boxes
         # radians = a * math.pi / 180
@@ -824,8 +914,8 @@ def random_perspective(img, targets=(), degrees=10, translate=.1, scale=.1, shea
         # xy = np.concatenate((x - w / 2, y - h / 2, x + w / 2, y + h / 2)).reshape(4, n).T
 
         # clip boxes
-        xy[:, [0, 2]] = xy[:, [0, 2]].clip(0, width)
-        xy[:, [1, 3]] = xy[:, [1, 3]].clip(0, height)
+        xy[:, [0, 2]] = xy[:, [0, 2]].clip(0, width_orig)
+        xy[:, [1, 3]] = xy[:, [1, 3]].clip(0, height_orig)
 
         # filter candidates
         i = box_candidates(box1=targets[:, 1:5].T * s, box2=xy.T)

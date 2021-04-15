@@ -88,6 +88,12 @@ def test(data,
         path = data['test'] if opt.task == 'test' else data['val']  # path to val/test images
         dataloader = create_dataloader(path, imgsz, batch_size, model.stride.max(), opt, pad=0.5, rect=True)[0]
 
+    """
+    Specify : alignment model use
+    """
+    total_distance = 0
+    total_count_corner_find = 0
+
     seen = 0
     confusion_matrix = ConfusionMatrix(nc=nc)
     names = {k: v for k, v in enumerate(model.names if hasattr(model, 'names') else model.module.names)}
@@ -127,6 +133,12 @@ def test(data,
             tcls = labels[:, 0].tolist() if nl else []  # target class
             path = Path(paths[si])
             seen += 1
+
+            """
+            Specify : alignment model use
+            """
+            center_distance = 0
+            count_corner_find = 0
 
             if len(pred) == 0:
                 if nl:
@@ -184,11 +196,26 @@ def test(data,
                 for cls in torch.unique(tcls_tensor):
                     ti = (cls == tcls_tensor).nonzero(as_tuple=False).view(-1)  # prediction indices
                     pi = (cls == pred[:, 5]).nonzero(as_tuple=False).view(-1)  # target indices
+                    # print(ti, pi)
 
                     # Search for detections
                     if pi.shape[0]:
                         # Prediction to target ious
                         ious, i = box_iou(predn[pi, :4], tbox[ti]).max(1)  # best ious, indices
+
+                        # """
+                        # Specify : alignment model use
+                        # """
+                        # center_x_gt = (tbox[ti,0] + tbox[ti,2]) / 2
+                        # # print("gt:",center_x_gt.shape)
+                        # center_y_gt = (tbox[ti,1] + tbox[ti,3]) / 2
+                        # center_x = (predn[pi, 0] + predn[pi, 2]) / 2
+                        # # print("pr:",center_x.shape, predn[pi].shape)
+                        # center_y = (predn[pi, 1] + predn[pi, 3]) / 2
+                        # w2 = tbox[ti,2] - tbox[ti,0]
+                        # h2 = tbox[ti,3] - tbox[ti,1]
+                        # dis = torch.sqrt((center_x - center_x_gt)**2 + (center_y - center_y_gt)**2) / torch.sqrt(w2**2 + h2**2)
+                        # print("distance:", dis.shape)
 
                         # Append detections
                         detected_set = set()
@@ -198,11 +225,24 @@ def test(data,
                                 detected_set.add(d.item())
                                 detected.append(d)
                                 correct[pi[j]] = ious[j] > iouv  # iou_thres is 1xn
-                                if len(detected) == nl:  # all targets already located in image
-                                    break
+                                # """
+                                # Specify : alignment model use
+                                # """
+                                # if predn[j,4] > 0.2:
+                                #     center_distance += dis[j]
+                                #     count_corner_find += 1
+                                # if len(detected) == nl:  # all targets already located in image
+                                #     break
 
             # Append statistics (correct, conf, pcls, tcls)
             stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), tcls))
+
+            # """
+            # Specify : alignment model use
+            # """
+            # # print("one image center dis:", center_distance, count_corner_find)
+            # total_count_corner_find += count_corner_find
+            # total_distance += center_distance
 
         # Plot images
         if plots and batch_i < 3:
@@ -210,6 +250,12 @@ def test(data,
             plot_images(img, targets, paths, f, names)  # labels
             f = save_dir / f'test_batch{batch_i}_pred.jpg'
             plot_images(img, output_to_target(output, width, height), paths, f, names)  # predictions
+
+    # """
+    # Specify : alignment model use
+    # """
+    # if total_count_corner_find != 0:
+    #     print("total distance:", total_distance, total_count_corner_find, total_distance/total_count_corner_find)
 
     # Compute statistics
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy

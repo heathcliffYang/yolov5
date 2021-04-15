@@ -199,6 +199,11 @@ def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False, eps=
         b2_x1, b2_x2 = box2[0] - box2[2] / 2, box2[0] + box2[2] / 2
         b2_y1, b2_y2 = box2[1] - box2[3] / 2, box2[1] + box2[3] / 2
 
+        # for x1, x2 in zip(box1[0], box2[0]):
+        #     print("x", x1, x2)
+        # for x1, x2 in zip(box1[1], box2[1]):
+        #     print("y", x1, x2)
+
     # Intersection area
     inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * \
             (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(0)
@@ -222,7 +227,20 @@ def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False, eps=
                 v = (4 / math.pi ** 2) * torch.pow(torch.atan(w2 / h2) - torch.atan(w1 / h1), 2)
                 with torch.no_grad():
                     alpha = v / ((1 + eps) - iou + v)
-                return iou - (rho2 / c2 + v * alpha)  # CIoU
+                """
+                Specify : alignment model use
+                """
+                center_x_gt = (b2_x1 + b2_x2) / 2
+                center_y_gt = (b2_y1 + b2_y2) / 2
+                center_x = (b1_x1 + b1_x2) / 2
+                center_y = (b1_y1 + b1_y2) / 2
+                dis = torch.sqrt((center_x - center_x_gt)**2 + (center_y - center_y_gt)**2) / torch.sqrt(w2**2 + h2**2)
+                ciou_loss = iou - (rho2 / c2 + v * alpha)
+                return ciou_loss, "ciou"
+                # if random.randint(0,1) < 0.5:
+                #     return ciou_loss, "ciou" #- dis  # CIoU
+                # else:
+                #     return dis * 10, "dis"
         else:  # GIoU https://arxiv.org/pdf/1902.09630.pdf
             c_area = cw * ch + eps  # convex area
             return iou - (c_area - union) / c_area  # GIoU
